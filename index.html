@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>X Player – working embed</title>
+<style>
+  /* --- tokens approximating your snapshot (tweak if needed) --- */
+  :root{
+    --background:#020408;            /* tw-bg-background */
+    --overlay-20:rgba(245,250,255,.20); /* tw-bg-overlay-20 / tw-stroke-overlay-10-ish */
+    --surface-90:rgba(245,250,255,.90); /* tw-bg-surface-90 */
+    --text:#fff;
+    --digits-font: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    --icon-size:16px;
+    --thumb-w:12px;
+    --thumb-h:24px;
+    --track-h:2px;
+    --elev-1:0 1px 2px rgba(0,0,0,.5);
+    --hide-delay:2000ms; /* controls auto-hide delay */
+  }
+
+  html,body{margin:0;background:#111;color:var(--text);font:14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;}
+  *{box-sizing:border-box}
+
+  /* --- player shell --- */
+  .x-player{
+    position:relative;
+    background:var(--background);
+    color:var(--text);
+    border-radius:12px;
+    width:min(100%, 960px);
+    margin:24px auto;
+    overflow:hidden;
+  }
+
+  /* video area */
+  .x-player__video{
+    display:block;
+    width:100%;
+    height:auto;
+    background:var(--background);
+  }
+
+  /* top overlay status (time while dragging, speed msg) */
+  .x-player__dragging-time{
+    position:absolute; left:50%; top:12px; transform:translateX(-50%);
+    z-index:3; pointer-events:none; font-family:var(--digits-font);
+    text-shadow:0 1px 2px rgba(0,0,0,.6);
+  }
+
+  /* controls row (your snapshot puts buttons top-left, we keep a bar) */
+  .x-player__controls{
+    position:absolute; left:12px; right:12px; top:12px;
+    display:flex; align-items:center; gap:12px;
+    z-index:3;
+  }
+
+  .XContentViewer__button,
+  .x-player__controls button{
+    background:none; border:0; color:#fff; width:32px; height:32px; border-radius:6px;
+    display:inline-flex; align-items:center; justify-content:center;
+    cursor:pointer;
+  }
+  .XContentViewer__button:hover,
+  .x-player__controls button:hover{ background:rgba(255,255,255,.08); }
+
+  /* timeline (bottom bar) */
+  .x-player__timeline{
+    position:absolute; left:12px; right:12px; bottom:8px; z-index:3;
+    display:flex; align-items:center; gap:12px;
+    opacity:1; transition:opacity .15s ease;
+  }
+  .x-player--controls-hidden .x-player__timeline,
+  .x-player--controls-hidden .x-player__controls{ opacity:0; pointer-events:none; }
+
+  .x-player__seeker{
+    position:relative; flex:1; height:36px; cursor:pointer; display:flex; align-items:center;
+    touch-action:none; user-select:none;
+  }
+  .x-player__seeker > .tw-relative{
+    position:relative; width:100%; height:var(--track-h); background:var(--overlay-20);
+  }
+  .x-player__seeker .tw-absolute{
+    position:absolute; left:0; top:0; bottom:0; right:100%;
+    background:var(--surface-90); border-radius:9999px;
+  }
+  .slider-thumb{
+    position:absolute; top:50%; transform:translate(-50%,-50%);
+    width:var(--thumb-w); height:var(--thumb-h); border-radius:999px;
+    background:var(--background); border:2px solid var(--surface-90); box-shadow:var(--elev-1);
+    outline:0;
+  }
+
+  /* volume */
+  .x-player__volume{ display:flex; align-items:center; gap:8px; }
+  .x-player__volume input[type="range"]{
+    width:110px; height:4px; background:transparent; appearance:none;
+  }
+  .x-player__volume input[type="range"]::-webkit-slider-runnable-track{
+    height:4px; background:rgba(255,255,255,.25); border-radius:9999px;
+  }
+  .x-player__volume input[type="range"]::-webkit-slider-thumb{
+    -webkit-appearance:none; appearance:none; width:12px; height:12px; border-radius:50%;
+    background:#fff; margin-top:-4px; box-shadow:var(--elev-1);
+  }
+
+  /* spinner (kept simple) */
+  .x-player__spinner{ position:absolute; inset:0; display:none; align-items:center; justify-content:center; z-index:2; }
+  .x-player__spinner.is-on{ display:flex; }
+  .x-player__spinner svg{ width:64px; height:64px; }
+
+  /* always show while you test; comment these 3 lines to allow auto-hide */
+  /* .x-player__timeline, .x-player__controls{ opacity:1 !important; pointer-events:auto !important; } */
+</style>
+</head>
+<body>
+
+<div class="x-player x-player--controls-hidden" data-testid="player">
+  <!-- spinner -->
+  <div class="x-player__spinner" data-testid="player-spinner">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor">
+      <circle cx="8" cy="8" r="7.5" stroke-width="1" stroke-dasharray="100,200" stroke-linecap="round" />
+      <circle cx="8" cy="8" r="7.5" stroke-width="1" style="stroke: rgba(245,250,255,.1)" />
+    </svg>
+  </div>
+
+  <!-- top-left controls like your snapshot -->
+  <div class="x-player__controls">
+    <button class="XContentViewer__button x-player__play-btn" aria-label="Play/Pause">▶</button>
+    <div class="x-player__volume">
+      <button class="XContentViewer__button" aria-label="Mute/Unmute">🔊</button>
+      <input type="range" min="0" max="1" step="0.01" value="1" />
+    </div>
+    <div style="margin-left:auto; display:flex; gap:8px;">
+      <button class="XContentViewer__button x-player__backward-btn" aria-label="Back 10s">⏪</button>
+      <button class="XContentViewer__button x-player__forward-btn" aria-label="Forward 10s">⏩</button>
+      <button class="XContentViewer__button x-player__fullscreen-btn" aria-label="Fullscreen">⛶</button>
+    </div>
+  </div>
+
+  <!-- time readout like snapshot -->
+  <div class="x-player__dragging-time" data-testid="player-current-time">
+    <span class="current">00:00</span><span class="sep" style="opacity:.55;margin:0 .5ch">/</span><span class="total" style="opacity:.55">00:00</span>
+  </div>
+
+  <!-- timeline -->
+  <div class="x-player__timeline" data-testid="player-timeline">
+    <span class="slider x-player__seeker" aria-label="Seek">
+      <span class="tw-relative">
+        <span class="tw-absolute"></span>
+      </span>
+      <div class="slider-thumb" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
+    </span>
+  </div>
+
+  <!-- actual video: CHANGE src to your video -->
+  <video class="x-player__video" playsinline preload="metadata" src="YOUR-VIDEO.mp4"></video>
+</div>
+
+<script>
+(function(){
+  const root = document.querySelector('.x-player');
+  const video = root.querySelector('.x-player__video');
+  const spinner = root.querySelector('.x-player__spinner');
+
+  const playBtn = root.querySelector('.x-player__play-btn');
+  const backBtn = root.querySelector('.x-player__backward-btn');
+  const fwdBtn  = root.querySelector('.x-player__forward-btn');
+  const fsBtn   = root.querySelector('.x-player__fullscreen-btn');
+
+  const volWrap = root.querySelector('.x-player__volume');
+  const volBtn  = volWrap.querySelector('button');
+  const volRange= volWrap.querySelector('input[type="range"]');
+
+  const seeker  = root.querySelector('.x-player__seeker');
+  const track   = seeker.querySelector('.tw-relative');
+  const fill    = seeker.querySelector('.tw-absolute');
+  const thumb   = seeker.querySelector('.slider-thumb');
+
+  const timeHud = root.querySelector('.x-player__dragging-time');
+  const timeCur = timeHud.querySelector('.current');
+  const timeTot = timeHud.querySelector('.total');
+
+  const fmt = s => {
+    if(!isFinite(s)) return '00:00';
+    const m = Math.floor(s/60), sec = Math.floor(s%60);
+    return String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0');
+  };
+
+  /* --- spinner --- */
+  function loading(on){ spinner.classList.toggle('is-on', !!on); }
+  video.addEventListener('waiting', ()=>loading(true));
+  video.addEventListener('playing', ()=>loading(false));
+  video.addEventListener('canplay', ()=>loading(false));
+  video.addEventListener('seeking', ()=>loading(true));
+  video.addEventListener('seeked',  ()=>loading(false));
+
+  /* --- play/pause --- */
+  function updatePlayIcon(){
+    playBtn.textContent = video.paused ? '▶' : '⏸';
+  }
+  playBtn.addEventListener('click', ()=> video.paused ? video.play() : video.pause());
+  video.addEventListener('play', updatePlayIcon);
+  video.addEventListener('pause', updatePlayIcon);
+
+  /* --- skip --- */
+  backBtn?.addEventListener('click', ()=> video.currentTime = Math.max(0, video.currentTime - 10));
+  fwdBtn?.addEventListener('click',  ()=> video.currentTime = Math.min(video.duration, video.currentTime + 10));
+
+  /* --- volume + mute --- */
+  function applyVolumeUI(){
+    volRange.value = video.muted ? 0 : video.volume;
+    volBtn.textContent = (video.muted || video.volume===0) ? '🔇' : '🔊';
+  }
+  volRange.addEventListener('input', e => { video.volume = parseFloat(e.target.value); video.muted = video.volume===0; applyVolumeUI(); });
+  volBtn.addEventListener('click', ()=> { video.muted = !video.muted; if(video.muted && video.volume===0) video.volume=.5; applyVolumeUI(); });
+  applyVolumeUI();
+
+  /* --- seeker --- */
+  let drag = false;
+  function pctFromEvent(ev){
+    const r = track.getBoundingClientRect();
+    const x = Math.min(Math.max((ev.clientX ?? ev.touches?.[0]?.clientX) - r.left, 0), r.width);
+    return r.width ? (x / r.width) : 0;
+  }
+  function setPct(p){
+    p = Math.max(0, Math.min(1, p));
+    fill.style.right = (100 - p*100) + '%';
+    thumb.style.left = `calc(${(p*100)}% + 0px)`;
+    thumb.setAttribute('aria-valuenow', Math.round(p*100));
+  }
+  function reflectTime(){
+    if (!isFinite(video.duration)) return;
+    const p = video.currentTime / video.duration;
+    setPct(p);
+    timeCur.textContent = fmt(video.currentTime);
+    timeTot.textContent = fmt(video.duration);
+  }
+  video.addEventListener('timeupdate', reflectTime);
+  video.addEventListener('loadedmetadata', reflectTime);
+
+  seeker.addEventListener('pointerdown', ev => {
+    drag = true; seeker.setPointerCapture(ev.pointerId);
+    const p = pctFromEvent(ev);
+    setPct(p); video.currentTime = p * video.duration;
+  });
+  seeker.addEventListener('pointermove', ev => {
+    if(!drag) return;
+    const p = pctFromEvent(ev);
+    setPct(p); video.currentTime = p * video.duration;
+    showControls(); // keep HUD visible while scrubbing
+  });
+  seeker.addEventListener('pointerup', ()=> drag=false);
+
+  /* --- auto-hide controls like the original --- */
+  let hideT;
+  function showControls(){
+    root.classList.remove('x-player--controls-hidden');
+    clearTimeout(hideT);
+    hideT = setTimeout(()=> root.classList.add('x-player--controls-hidden'), parseInt(getComputedStyle(document.documentElement).getPropertyValue('--hide-delay')) || 2000);
+  }
+  root.addEventListener('mousemove', showControls);
+  root.addEventListener('pointermove', showControls);
+  root.addEventListener('keydown', showControls);
+  video.addEventListener('play', showControls);
+  video.addEventListener('pause', ()=> root.classList.remove('x-player--controls-hidden'));
+  showControls();
+
+  /* --- fullscreen --- */
+  fsBtn?.addEventListener('click', async ()=>{
+    if (!document.fullscreenElement) { await root.requestFullscreen(); }
+    else { await document.exitFullscreen(); }
+  });
+
+  /* ensure initial UI sync */
+  updatePlayIcon(); reflectTime();
+})();
+</script>
+
+</body>
+</html>
